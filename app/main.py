@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-MODEL_DIR = "model"
+MODEL_DIR = "likeyellow/klue-review-star"
 MAX_LEN = 256
 
 # 라벨 순서 [부정, 긍정, 중립] → 별점 기준값
