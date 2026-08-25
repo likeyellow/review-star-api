@@ -21,8 +21,13 @@ state = {}
 async def lifespan(app: FastAPI):
     """서버 시작할 때 모델을 한 번만 메모리에 올린다."""
     state["tokenizer"] = AutoTokenizer.from_pretrained(MODEL_DIR)
-    state["model"] = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).eval()
-    torch.set_num_threads(max(1, torch.get_num_threads()))
+    model = AutoModelForSequenceClassification.from_pretrained(
+        MODEL_DIR,
+        dtype=torch.float16,        # 메모리 절반
+        low_cpu_mem_usage=True,     # 로딩 중 피크 억제
+    )
+    state["model"] = model.float().eval()   # 추론은 float32로
+    torch.set_num_threads(1)
     print("모델 로드 완료")
     yield
     state.clear()
