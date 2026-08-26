@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
         dtype=torch.float16,        # 메모리 절반
         low_cpu_mem_usage=True,     # 로딩 중 피크 억제
     )
-    state["model"] = model.float().eval()   # 추론은 float32로
+    state["model"] = model.eval()   # 추론은 float32로
     torch.set_num_threads(1)
     print("모델 로드 완료")
     yield
