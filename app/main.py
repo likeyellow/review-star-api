@@ -7,12 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-MODEL_DIR = "likeyellow/klue-review-star"
+MODEL_DIR = "likeyellow/klue-review-star-4class"
 MAX_LEN = 256
 
-# 라벨 순서 [부정, 긍정, 중립] → 별점 기준값
-ANCHOR = np.array([1.0, 5.0, 3.0])
-LABELS = ["negative", "positive", "neutral"]
+# 라벨 순서 [부정, 긍정, 중립, 리뷰아님]
+ANCHOR = np.array([1.0, 5.0, 3.0])          # 앞 3개에만 대응
+LABELS = ["negative", "positive", "neutral", "not_a_review"]
 
 state = {}
 
@@ -21,19 +21,15 @@ state = {}
 async def lifespan(app: FastAPI):
     """서버 시작할 때 모델을 한 번만 메모리에 올린다."""
     state["tokenizer"] = AutoTokenizer.from_pretrained(MODEL_DIR)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_DIR,
-        dtype=torch.float16,        # 메모리 절반
-        low_cpu_mem_usage=True,     # 로딩 중 피크 억제
-    )
-    state["model"] = model.eval()   # 추론은 float32로
-    torch.set_num_threads(1)
+    state["model"] = AutoModelForSequenceClassification.from_pretrained(
+        MODEL_DIR, low_cpu_mem_usage=True
+    ).eval()
     print("모델 로드 완료")
     yield
     state.clear()
 
 
-app = FastAPI(title="리뷰 별점 산출 API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="리뷰 별점 산출 API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,9 +48,10 @@ class ReviewIn(BaseModel):
 
 
 class ReviewOut(BaseModel):
-    star: float
-    confidence: float
+    star: float | None          # 리뷰가 아니면 None
+    confidence: float | None
     label: str
+    is_review: bool
     probs: dict
 
 
@@ -64,21 +61,27 @@ def score_text(text: str) -> ReviewOut:
     with torch.no_grad():
         p = torch.softmax(model(**enc).logits, dim=-1)[0].numpy()
 
-    star = float((p * ANCHOR).sum())                    # 확률 가중 기댓값
-    ent = float(-(p * np.log(p + 1e-9)).sum())          # 엔트로피
-    conf = 1 - ent / np.log(3)                          # 정규화 후 반전
+    probs = {k: round(float(v), 4) for k, v in zip(LABELS, p)}
+    top = int(p.argmax())
 
-    return ReviewOut(
-        star=round(star, 2),
-        confidence=round(conf, 3),
-        label=LABELS[int(p.argmax())],
-        probs={k: round(float(v), 4) for k, v in zip(LABELS, p)},
-    )
+    # 리뷰가 아니면 별점을 산출하지 않는다
+    if top == 3:
+        return ReviewOut(star=None, confidence=None, label=LABELS[3],
+                         is_review=False, probs=probs)
+
+    # 앞 3개만 정규화해서 기댓값과 엔트로피를 구한다
+    q = p[:3] / p[:3].sum()
+    star = float((q * ANCHOR).sum())
+    ent = float(-(q * np.log(q + 1e-9)).sum())
+    conf = 1 - ent / np.log(3)
+
+    return ReviewOut(star=round(star, 2), confidence=round(conf, 3),
+                     label=LABELS[top], is_review=True, probs=probs)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": "model" in state}
+    return {"status": "ok", "model_loaded": "model" in state, "classes": 4}
 
 
 @app.post("/review/score", response_model=ReviewOut)
